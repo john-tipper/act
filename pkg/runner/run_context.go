@@ -195,6 +195,10 @@ func (rc *RunContext) startHostEnvironment() common.Executor {
 		if err := os.MkdirAll(actPath, 0o777); err != nil {
 			return err
 		}
+		workflowPath := filepath.Join(actPath, "workflow")
+		if err := os.MkdirAll(workflowPath, 0o777); err != nil {
+			return err
+		}
 		path := filepath.Join(miscpath, "hostexecutor")
 		if err := os.MkdirAll(path, 0o777); err != nil {
 			return err
