@@ -62,6 +62,7 @@ type Config struct {
 	ContainerNetworkMode               docker_container.NetworkMode // the network mode of job containers (the value of --network)
 	ActionCache                        ActionCache                  // Use a custom ActionCache Implementation
 	PassEnvVarsToDockerBuild           string                       // Comma separated list of keys of env vars to pass to build of Docker actions
+	ApplyEventFilters                  bool                         // Whether to filter workflows by event type
 }
 
 type caller struct {
