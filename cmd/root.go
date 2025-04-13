@@ -134,6 +134,7 @@ func createRootCommand(ctx context.Context, input *Input, version string) *cobra
 	rootCmd.PersistentFlags().StringVar(&input.passEnvVarsToDockerBuild, customEnvVarFlag, "", fmt.Sprintf("A comma separated list of keys of env vars to pass as build args to build of Docker actions, e.g. %s. Use flag with no value to get these default proxy values.", customEnvVarDefault))
 	rootCmd.PersistentFlags().Lookup(customEnvVarFlag).NoOptDefVal = customEnvVarDefault
 
+	rootCmd.PersistentFlags().BoolVar(&input.applyEventFilters, "apply-event-filters", false, "Only run workflows for an event that matches the event filters defined for the workflow.")
 	rootCmd.SetArgs(args())
 	return rootCmd
 }
@@ -451,7 +452,7 @@ func newRunCommand(ctx context.Context, input *Input) func(*cobra.Command, []str
 		matrixes := parseMatrix(input.matrix)
 		log.Debugf("Evaluated matrix inclusions: %v", matrixes)
 
-		planner, err := model.NewWorkflowPlanner(input.WorkflowsPath(), input.noWorkflowRecurse)
+		planner, err := model.NewWorkflowPlanner(input.WorkflowsPath(), input.noWorkflowRecurse, input.applyEventFilters, input.eventPath)
 		if err != nil {
 			return err
 		}
@@ -476,53 +477,6 @@ func newRunCommand(ctx context.Context, input *Input) func(*cobra.Command, []str
 		// collect all events from loaded workflows
 		events := planner.GetEvents()
 
-		// plan with filtered jobs - to be used for filtering only
-		var filterPlan *model.Plan
-
-		// Determine the event name to be filtered
-		var filterEventName string
-
-		if len(args) > 0 {
-			log.Debugf("Using first passed in arguments event for filtering: %s", args[0])
-			filterEventName = args[0]
-		} else if input.autodetectEvent && len(events) > 0 && len(events[0]) > 0 {
-			// set default event type to first event from many available
-			// this way user dont have to specify the event.
-			log.Debugf("Using first detected workflow event for filtering: %s", events[0])
-			filterEventName = events[0]
-		}
-
-		var plannerErr error
-		if jobID != "" {
-			log.Debugf("Preparing plan with a job: %s", jobID)
-			filterPlan, plannerErr = planner.PlanJob(jobID)
-		} else if filterEventName != "" {
-			log.Debugf("Preparing plan for a event: %s", filterEventName)
-			filterPlan, plannerErr = planner.PlanEvent(filterEventName)
-		} else {
-			log.Debugf("Preparing plan with all jobs")
-			filterPlan, plannerErr = planner.PlanAll()
-		}
-		if filterPlan == nil && plannerErr != nil {
-			return plannerErr
-		}
-
-		if list {
-			err = printList(filterPlan)
-			if err != nil {
-				return err
-			}
-			return plannerErr
-		}
-
-		if graph {
-			err = drawGraph(filterPlan)
-			if err != nil {
-				return err
-			}
-			return plannerErr
-		}
-
 		// plan with triggered jobs
 		var plan *model.Plan
 
@@ -546,19 +500,41 @@ func newRunCommand(ctx context.Context, input *Input) func(*cobra.Command, []str
 		}
 
 		// build the plan for this run
+		var plannerErr error
 		if jobID != "" {
 			log.Debugf("Planning job: %s", jobID)
-			plan, plannerErr = planner.PlanJob(jobID)
+			plan, plannerErr = planner.PlanJob(jobID, eventName)
 		} else {
 			log.Debugf("Planning jobs for event: %s", eventName)
 			plan, plannerErr = planner.PlanEvent(eventName)
 		}
 		if plan != nil {
-			if len(plan.Stages) == 0 {
-				plannerErr = fmt.Errorf("Could not find any stages to run. View the valid jobs with `act --list`. Use `act --help` to find how to filter by Job ID/Workflow/Event Name")
+			if len(plan.Stages) == 0 && !input.applyEventFilters {
+				plannerErr = fmt.Errorf("could not find any stages to run. View the valid jobs with `act --list`. Use `act --help` to find how to filter by Job ID/Workflow/Event Name")
 			}
 		}
 		if plan == nil && plannerErr != nil {
+			return plannerErr
+		}
+
+		if list {
+			err = printList(plan)
+			if err != nil {
+				return err
+			}
+			return plannerErr
+		}
+
+		if graph {
+			err = drawGraph(plan)
+			if err != nil {
+				return err
+			}
+			return plannerErr
+		}
+
+		if len(plan.Stages) == 0 && input.applyEventFilters {
+			log.Info("The configured event filters caused all jobs to be skipped - if you are expecting a job to execute then check your supplied event structure against the workflow 'on' filters, or run Act without applying event filters.")
 			return plannerErr
 		}
 
@@ -642,6 +618,7 @@ func newRunCommand(ctx context.Context, input *Input) func(*cobra.Command, []str
 			ReplaceGheActionTokenWithGithubCom: input.replaceGheActionTokenWithGithubCom,
 			Matrix:                             matrixes,
 			ContainerNetworkMode:               docker_container.NetworkMode(input.networkName),
+			ApplyEventFilters:                  input.applyEventFilters,
 			PassEnvVarsToDockerBuild:           input.passEnvVarsToDockerBuild,
 		}
 		if input.useNewActionCache || len(input.localRepository) > 0 {
